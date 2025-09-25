@@ -1,0 +1,28 @@
+[package]
+name = "rustyThermohygrometer"
+version = "0.1.2"
+authors = ["mrki"]
+edition = "2021"
+resolver = "2"
+rust-version = "1.77"
+
+[profile.release]
+opt-level = "s"
+
+[profile.dev]
+debug = true # Symbols are nice and they don't increase the size on Flash
+opt-level = "z"
+
+[features]
+#pio = ["esp-idf-sys/pio"]
+
+[dependencies]
+log = "0.4"
+esp-idf-svc = "0.51"
+embedded-svc = "0.28.1"
+esp-idf-hal = "0.45.2"
+esp-idf-sys = { version = "0.36.1", features = ["binstart"] }
+heapless = "0.9.1"
+
+[build-dependencies]
+embuild = "0.33"
