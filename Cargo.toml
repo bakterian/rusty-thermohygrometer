@@ -24,6 +24,7 @@ esp-idf-hal = "0.45.2"
 esp-idf-sys = { version = "0.36.1", features = ["binstart"] }
 heapless = "0.9.1"
 anyhow = "1.0.100"
+embedded-hal = "1.0.0"
 
 [build-dependencies]
 embuild = "0.33"

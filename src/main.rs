@@ -2,13 +2,121 @@ mod wifi;
 
 use esp_idf_hal::{delay::FreeRtos, peripherals::Peripherals};
 use esp_idf_svc::ping::EspPing;
-use esp_idf_svc::mqtt::client::{EspMqttClient, EventPayload, MqttClientConfiguration, MqttProtocolVersion};
+use esp_idf_svc::mqtt::client::{EspMqttClient, EventPayload, MqttClientConfiguration};
 use esp_idf_svc::ipv4::Ipv4Addr;
 use crate::wifi::Wifi;
 use esp_idf_svc::wifi::EspWifi;
 use esp_idf_svc::mqtt::client::QoS;
 use std::{thread::sleep, time::Duration};
 use anyhow;
+use std::net::ToSocketAddrs;
+
+use embedded_hal::spi::*;
+use esp_idf_hal::gpio;
+use esp_idf_hal::prelude::*;
+use esp_idf_hal::spi::config::Config;
+use esp_idf_hal::spi::*;
+
+
+fn blink_max7219<'a>(spi: &mut SpiDeviceDriver<'a, SpiDriver<'a>>)
+{
+// Application
+
+    // 1) Initalize Matrix Display
+
+    // 1.a) Power Up Device
+
+    // - Prepare Data to be Sent
+    // 8-bit Data/Command Corresponding to Matrix Power Up
+    let data: u8 = 0x01;
+    // 4-bit Address of Shutdown Mode Command
+    let addr: u8 = 0x0C;
+    // Package into array to pass to SPI write method
+    // Write method will grab array and send all data in it
+    let send_array: [u8; 2] = [addr, data];
+
+    // - Send Data
+    // Shift in 16 bits by passing send_array (bits will be shifted MSB first)
+    // Note that write method handles the CS pin state
+    spi.write(&send_array).unwrap();
+
+    // 1.b) Set up Decode Mode
+
+    // - Prepare Information to be Sent
+    // 8-bit Data/Command Corresponding to No Decode Mode
+    let data: u8 = 0x00;
+    // 4-bit Address of Decode Mode Command
+    let addr: u8 = 0x09;
+    // Package into array to pass to SPI write method
+    // Write method will grab array and send all data in it
+    let send_array: [u8; 2] = [addr, data];
+
+    // - Send Data
+    // Shift in 16 bits by passing send_array (bits will be shifted MSB first)
+    spi.write(&send_array).unwrap();
+
+    // 1.c) Configure Scan Limit
+
+    // - Prepare Information to be Sent
+    // 8-bit Data/Command Corresponding to Scan Limit Displaying all digits
+    let data: u8 = 0x07;
+    // 4-bit Address of Scan Limit Command
+    let addr: u8 = 0x0B;
+    // Package into array to pass to SPI write method
+    // Write method will grab array and send all data in it
+    let send_array: [u8; 2] = [addr, data];
+
+    // - Send Data
+    // Shift in 16 bits by passing send_array (bits will be shifted MSB first)
+    spi.write(&send_array).unwrap();
+
+    // 1.c) Configure Intensity
+
+    // - Prepare Information to be Sent
+    // 8-bit Data/Command Corresponding to (15/32 Duty Cycle) Medium Intensity
+    let data: u8 = 0x07;
+    // 4-bit Address of Intensity Control Command
+    let addr: u8 = 0x0A;
+    // Package into array to pass to SPI write method
+    // Write method will grab array and send all data in it
+    let send_array: [u8; 2] = [addr, data];
+
+    // - Send Data
+    // Shift in 16 bits by passing send_array (bits will be shifted MSB first)
+    spi.write(&send_array).unwrap();
+
+	let mut data: u8 = 1;
+
+
+	// 2) Light up LED Matrix row by row with 500ms delay in between
+	// Iterate over all rows of LED matrix
+	for addr in 1..9 {
+		// addr refrences the row data will be sent to
+		let send_array: [u8; 2] = [addr, data];
+		// Shift a 1 with evey loop
+		data = data << 1;
+
+		// Send data just like earlier
+		spi.write(&send_array).unwrap();
+
+		// Delay for 500ms to show effect
+		FreeRtos::delay_ms(500_u32);
+	}
+
+	FreeRtos::delay_ms(1000_u32);
+
+	let send_array: [u8; 2] = [4, 255];
+	spi.write(&send_array).unwrap();
+
+	FreeRtos::delay_ms(3000_u32);
+
+	// Clear the LED matrix row by row with 500ms delay in between
+	for addr in 1..9 {
+		let send_array: [u8; 2] = [addr, data];
+		spi.write(&send_array).unwrap();
+		FreeRtos::delay_ms(500_u32);
+	}
+}
 
 fn remote_servers_reachable(wifi: EspWifi<'static>) -> bool 
 {
@@ -19,7 +127,24 @@ fn remote_servers_reachable(wifi: EspWifi<'static>) -> bool
 		.subnet
 		.gateway;
 
-	let google_addr = Ipv4Addr::new(8, 8, 8, 8);
+	// Helper function to resolve a hostname to an IPv4 address
+	fn resolve_hostname_to_ipv4(hostname: &str) -> anyhow::Result<Ipv4Addr> {
+		let addr = (hostname, 80)
+			.to_socket_addrs()?
+			.find_map(|sockaddr| {
+				if let std::net::SocketAddr::V4(ipv4) = sockaddr {
+					Some(Ipv4Addr::from(ipv4.ip().octets()))
+				} else {
+					None
+				}
+			})
+			.ok_or_else(|| anyhow::anyhow!("No IPv4 address found for hostname"))?;
+		Ok(addr)
+	}
+
+	let google_addr = resolve_hostname_to_ipv4("google.com").expect("Failed to resolve google.com");
+
+	//let hive_borker_addr = resolve_hostname_to_ipv4("broker.mqttdashboard.com").expect("Failed to parse broker.mqttdashboard.com address");
 
 	let ip_addr_array = [gw_addr, google_addr];
 
@@ -29,11 +154,23 @@ fn remote_servers_reachable(wifi: EspWifi<'static>) -> bool
 
 		println!("Pinging ip address: {}", ip);
 
+		// let ping = EspPing::default()
+		// 	.ping(ip, &Default::default());
+
 		let ping = EspPing::default()
 			.ping(ip, &Default::default());
 
 		match &ping {
-			Ok(summary) => println!("Ping success summary: {:?}", summary),
+			Ok(summary) => 
+			{
+				if(summary.received > 0) {
+					println!("Ping success summary: {:?}", summary);
+				} else {
+					println!("Ping to {} failed", ip);
+					ping_succesfull = false;
+					break;
+				}
+			}
 			Err(e) => {
 				println!("Ping error: {:?}", e);
 				ping_succesfull = false;
@@ -78,6 +215,33 @@ fn main() -> anyhow::Result<()>
 
 	let peripherals = Peripherals::take().expect("Failed to take peripherals");
 
+    // Create handles for SPI pins
+    let sclk = peripherals.pins.gpio8;
+    let mosi = peripherals.pins.gpio10;
+    let cs = peripherals.pins.gpio5;
+
+    // Instantiate SPI Driver
+    let spi_drv = SpiDriver::new(
+        peripherals.spi2,
+        sclk,
+        mosi,
+        None::<gpio::AnyIOPin>,
+        &SpiDriverConfig::new(),
+    )
+    .unwrap();
+
+    // Configure Parameters for SPI device
+    let config = Config::new().baudrate(2.MHz().into()).data_mode(Mode {
+        polarity: Polarity::IdleLow,
+        phase: Phase::CaptureOnFirstTransition,
+    });
+
+	// Instantiate SPI Device Driver and Pass Configuration
+	let mut spi: SpiDeviceDriver<'_, SpiDriver<'_>> = SpiDeviceDriver::new(spi_drv, Some(cs), &config).unwrap();
+
+	blink_max7219(&mut spi);
+
+
 	let wifi = Wifi::init(peripherals.modem); // Connectivity goes away when dropped
 
 	FreeRtos::delay_ms(5000); // Wait for the DHCP server to deliver a lease
@@ -90,7 +254,6 @@ fn main() -> anyhow::Result<()>
 		println!("Remote servers reachable, setting up MQTT client");
 
 		let mqtt_config = MqttClientConfiguration {
-			protocol_version: Some(MqttProtocolVersion::V3_1_1),
 			username: Some(app_config.mqtt_broker_username),
 			password: Some(app_config.mqtt_broker_pwd),
 			..Default::default()
